@@ -1,22 +1,27 @@
 """Draw a 1024x1024 newspaper front page summing up the world news of
 Wednesday 18 November 2026, and write it to <MAKEFUN_OUTPUT_DIR>/entry.png.
 
-PIL only, no network, no randomness: the output is byte-identical on
-repeat runs. All facts are the verified brief for 18 November 2026.
+PURE Python 3.13 standard library only (struct, zlib, binascii, os):
+the sandbox runs plain python:3.13-slim, which has no Pillow and no
+DejaVu fonts, so this file embeds its own 5x7 bitmap font and its own
+PNG writer. No network, no randomness, no timestamps in the image:
+the output is byte-identical on repeat runs. All facts are the
+verified brief for 18 November 2026. All text is rendered UPPERCASE
+(newspaper style).
 """
 
+import binascii
 import os
-from PIL import Image, ImageDraw, ImageFont
+import struct
+import zlib
 
 W, H = 1024, 1024
-FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
-BOLD = os.path.join(FONT_DIR, "DejaVuSans-Bold.ttf")
-REG = os.path.join(FONT_DIR, "DejaVuSans.ttf")
 
 # Palette: newsprint paper, navy ink, Nvidia green accent, red alert.
 PAPER = (247, 243, 232)
 NAVY = (15, 42, 68)
 NAVY2 = (23, 58, 90)
+PANEL = (13, 38, 60)
 INK = (24, 28, 34)
 GREEN = (98, 158, 31)
 GREEN_D = (72, 120, 20)
@@ -24,20 +29,242 @@ RED = (178, 34, 34)
 GOLD = (201, 162, 39)
 TEAL = (18, 110, 110)
 GREY = (110, 116, 122)
+WHITE = (255, 255, 255)
 TILE_BG = (255, 255, 255)
 RULE = (200, 192, 172)
+LIGHT = (214, 224, 234)
+MUTED = (74, 80, 88)
+
+# ---------------------------------------------------------------- font
+# 5x7 bitmap glyphs: 7 rows of 5 characters, '#' = ink, '.' = blank.
+FONT = {
+    " ": (".....", ".....", ".....", ".....", ".....", ".....", "....."),
+    "!": ("..#..", "..#..", "..#..", "..#..", "..#..", ".....", "..#.."),
+    '"': (".#.#.", ".#.#.", ".#.#.", ".....", ".....", ".....", "....."),
+    "#": (".#.#.", ".#.#.", "#####", ".#.#.", "#####", ".#.#.", ".#.#."),
+    "$": ("..#..", ".####", "#.#..", ".###.", "..#.#", "####.", "..#.."),
+    "%": ("##..#", "##.#.", "...#.", "..#..", ".#...", "#.##.", "#..##"),
+    "&": (".##..", "#..#.", "#..#.", ".#...", "#.#.#", "#..#.", ".##.#"),
+    "'": ("..#..", "..#..", "..#..", ".....", ".....", ".....", "....."),
+    "(": ("...#.", "..#..", ".#...", ".#...", ".#...", "..#..", "...#."),
+    ")": (".#...", "..#..", "...#.", "...#.", "...#.", "..#..", ".#..."),
+    "*": (".....", ".#.#.", "..#..", "#####", "..#..", ".#.#.", "....."),
+    "+": (".....", "..#..", "..#..", "#####", "..#..", "..#..", "....."),
+    ",": (".....", ".....", ".....", ".....", ".##..", ".##..", ".#..."),
+    "-": (".....", ".....", ".....", "#####", ".....", ".....", "....."),
+    ".": (".....", ".....", ".....", ".....", ".....", ".##..", ".##.."),
+    "/": ("....#", "...#.", "...#.", "..#..", ".#...", ".#...", "#...."),
+    "0": (".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###."),
+    "1": ("..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."),
+    "2": (".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"),
+    "3": ("####.", "....#", "....#", ".###.", "....#", "....#", "####."),
+    "4": ("...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."),
+    "5": ("#####", "#....", "####.", "....#", "....#", "#...#", ".###."),
+    "6": (".###.", "#....", "#....", "####.", "#...#", "#...#", ".###."),
+    "7": ("#####", "....#", "...#.", "...#.", "..#..", "..#..", "..#.."),
+    "8": (".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."),
+    "9": (".###.", "#...#", "#...#", ".####", "....#", "....#", ".###."),
+    ":": (".....", ".##..", ".##..", ".....", ".##..", ".##..", "....."),
+    ";": (".....", ".##..", ".##..", ".....", ".##..", ".##..", ".#..."),
+    "=": (".....", ".....", "#####", ".....", "#####", ".....", "....."),
+    "?": (".###.", "#...#", "....#", "...#.", "..#..", ".....", "..#.."),
+    "@": (".###.", "#...#", "#.###", "#.#.#", "#.###", "#....", ".###."),
+    "A": (".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"),
+    "B": ("####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."),
+    "C": (".####", "#....", "#....", "#....", "#....", "#....", ".####"),
+    "D": ("####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."),
+    "E": ("#####", "#....", "#....", "####.", "#....", "#....", "#####"),
+    "F": ("#####", "#....", "#....", "####.", "#....", "#....", "#...."),
+    "G": (".####", "#....", "#....", "#.###", "#...#", "#...#", ".###."),
+    "H": ("#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"),
+    "I": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "#####"),
+    "J": ("..###", "...#.", "...#.", "...#.", "...#.", "#..#.", ".##.."),
+    "K": ("#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"),
+    "L": ("#....", "#....", "#....", "#....", "#....", "#....", "#####"),
+    "M": ("#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"),
+    "N": ("#...#", "##..#", "##..#", "#.#.#", "#..##", "#..##", "#...#"),
+    "O": (".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
+    "P": ("####.", "#...#", "#...#", "####.", "#....", "#....", "#...."),
+    "Q": (".###.", "#...#", "#...#", "#...#", "#.#.#", "#..#.", ".##.#"),
+    "R": ("####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"),
+    "S": (".####", "#....", "#....", ".###.", "....#", "....#", "####."),
+    "T": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."),
+    "U": ("#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
+    "V": ("#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#.."),
+    "W": ("#...#", "#...#", "#...#", "#.#.#", "#.#.#", "##.##", "#...#"),
+    "X": ("#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#"),
+    "Y": ("#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."),
+    "Z": ("#####", "....#", "...#.", "..#..", ".#...", "#....", "#####"),
+    "–": (".....", ".....", ".....", "#####", ".....", ".....", "....."),
+    "—": (".....", ".....", ".....", "#####", ".....", ".....", "....."),
+    "•": (".....", ".....", ".##..", ".##..", ".....", ".....", "....."),
+    "×": (".....", ".....", "#...#", ".#.#.", "..#..", ".#.#.", "#...#"),
+}
+
+BLANK = FONT[" "]
+
+# ---------------------------------------------------------------- framebuffer
+fb = bytearray(W * H * 3)
 
 
-def font(path, size):
-    return ImageFont.truetype(path, size)
+def set_px(x, y, c):
+    if 0 <= x < W and 0 <= y < H:
+        i = (y * W + x) * 3
+        fb[i], fb[i + 1], fb[i + 2] = c
 
 
-def wrap(draw, text, fnt, max_w):
+def fill_rect(x, y, w, h, c):
+    x0 = x if x > 0 else 0
+    y0 = y if y > 0 else 0
+    x1 = x + w
+    if x1 > W:
+        x1 = W
+    y1 = y + h
+    if y1 > H:
+        y1 = H
+    if x1 <= x0 or y1 <= y0:
+        return
+    row = bytes(c) * (x1 - x0)
+    n = (x1 - x0) * 3
+    for yy in range(y0, y1):
+        i = (yy * W + x0) * 3
+        fb[i:i + n] = row
+
+
+def draw_line(x0, y0, x1, y1, c):
+    """Bresenham line, 1px."""
+    dx = x1 - x0
+    dy = y1 - y0
+    sx = 1 if dx > 0 else -1
+    sy = 1 if dy > 0 else -1
+    dx = dx if dx >= 0 else -dx
+    dy = dy if dy >= 0 else -dy
+    if dx >= dy:
+        err = 2 * dy - dx
+        y = y0
+        for k in range(dx + 1):
+            set_px(x0 + k * sx, y, c)
+            if err >= 0:
+                y += sy
+                err -= 2 * dx
+            err += 2 * dy
+    else:
+        err = 2 * dx - dy
+        x = x0
+        for k in range(dy + 1):
+            set_px(x, y0 + k * sy, c)
+            if err >= 0:
+                x += sx
+                err -= 2 * dy
+            err += 2 * dx
+
+
+def draw_line_thick(x0, y0, x1, y1, w, c):
+    """Thick line: parallel thin lines offset perpendicular-ish."""
+    dx = x1 - x0
+    dy = y1 - y0
+    half = w // 2
+    if (dx if dx >= 0 else -dx) >= (dy if dy >= 0 else -dy):
+        for k in range(-half, half + 1):
+            draw_line(x0, y0 + k, x1, y1 + k, c)
+    else:
+        for k in range(-half, half + 1):
+            draw_line(x0 + k, y0, x1 + k, y1, c)
+
+
+def fill_circle(cx, cy, r, c):
+    for dy in range(-r, r + 1):
+        dx = int((r * r - dy * dy) ** 0.5)
+        fill_rect(cx - dx, cy + dy, 2 * dx + 1, 1, c)
+
+
+def draw_circle(cx, cy, r, c, quad=None):
+    """Midpoint circle outline. quad='ne' plots only the NE quadrant."""
+    x, y, d = 0, r, 1 - r
+    while x <= y:
+        pts = ((x, y), (y, x), (-x, y), (y, -x),
+               (x, -y), (-y, x), (-x, -y), (-y, -x))
+        for px, py in pts:
+            if quad == "ne" and not (px >= 0 and py <= 0):
+                continue
+            set_px(cx + px, cy + py, c)
+        if d < 0:
+            d += 2 * x + 3
+        else:
+            d += 2 * (x - y) + 5
+            y -= 1
+        x += 1
+
+
+def fill_polygon(pts, c):
+    """Scanline fill (even-odd), deterministic: intersections sorted."""
+    ys = [p[1] for p in pts]
+    for y in range(min(ys), max(ys) + 1):
+        xs = []
+        n = len(pts)
+        for i in range(n):
+            x0, y0 = pts[i]
+            x1, y1 = pts[(i + 1) % n]
+            if (y0 <= y < y1) or (y1 <= y < y0):
+                xs.append(x0 + (y - y0) * (x1 - x0) / (y1 - y0))
+        xs.sort()
+        for i in range(0, len(xs) - 1, 2):
+            xa = int(xs[i])
+            xb = int(xs[i + 1])
+            fill_rect(xa, y, xb - xa + 1, 1, c)
+
+
+def rounded_rect(x, y, w, h, r, c):
+    fill_rect(x + r, y, w - 2 * r, h, c)
+    fill_rect(x, y + r, w, h - 2 * r, c)
+    for cx, cy in ((x + r, y + r), (x + w - r - 1, y + r),
+                   (x + r, y + h - r - 1), (x + w - r - 1, y + h - r - 1)):
+        fill_circle(cx, cy, r, c)
+
+
+def rounded_rect_outline(x, y, w, h, r, width, border, fill):
+    rounded_rect(x, y, w, h, r, border)
+    rounded_rect(x + width, y + width, w - 2 * width, h - 2 * width,
+                 r - width if r > width else 0, fill)
+
+
+# ---------------------------------------------------------------- text
+def norm(text):
+    """Uppercase newspaper text; fold lookalike punctuation to glyphs."""
+    return (text.upper()
+            .replace("’", "'").replace("‘", "'")
+            .replace("·", "•"))
+
+
+def text_width(text, scale, tracking=0):
+    n = len(text)
+    if n == 0:
+        return 0
+    return n * 5 * scale + (n - 1) * (scale + tracking)
+
+
+def draw_text(x, y, text, scale, c, tracking=0):
+    """Draw text at integer scale; glyph advance is 6*scale + tracking."""
+    adv = 6 * scale + tracking
+    cx = x
+    for ch in text:
+        rows = FONT.get(ch, BLANK)
+        for ry in range(7):
+            row = rows[ry]
+            for rx in range(5):
+                if row[rx] == "#":
+                    fill_rect(cx + rx * scale, y + ry * scale,
+                              scale, scale, c)
+        cx += adv
+    return cx
+
+
+def wrap(text, scale, max_w, tracking=0):
     """Greedy word wrap by pixel width; returns list of lines."""
     lines, cur = [], ""
     for word in text.split():
         trial = word if not cur else cur + " " + word
-        if draw.textlength(trial, font=fnt) <= max_w:
+        if text_width(trial, scale, tracking) <= max_w:
             cur = trial
         else:
             if cur:
@@ -48,251 +275,245 @@ def wrap(draw, text, fnt, max_w):
     return lines
 
 
-def fit_lines(draw, text, fnt, max_w, max_lines):
+def fit_lines(text, scale, max_w, max_lines, tracking=0):
     """Wrap text to at most max_lines lines, ellipsising the last line."""
-    lines = wrap(draw, text, fnt, max_w)
+    lines = wrap(text, scale, max_w, tracking)
     if len(lines) <= max_lines:
         return lines
     lines = lines[:max_lines]
     last = lines[-1]
-    while last and draw.textlength(last + "\u2026", font=fnt) > max_w:
+    while last and text_width(last + "...", scale, tracking) > max_w:
         last = last[:-1].rstrip()
         if " " in last:
-            last = last[: last.rfind(" ")].rstrip()
-    lines[-1] = (last + "\u2026") if last else "\u2026"
+            last = last[:last.rfind(" ")].rstrip()
+    lines[-1] = (last + "...") if last else "..."
     return lines
 
 
-def spaced(draw, xy, text, fnt, fill, tracking=3):
-    """Draw text with extra letter spacing."""
-    x, y = xy
-    for ch in text:
-        draw.text((x, y), ch, font=fnt, fill=fill)
-        x += draw.textlength(ch, font=fnt) + tracking
-    return x
-
-
-def draw_chip(draw, x, y, s):
+# ---------------------------------------------------------------- pictograms
+def draw_chip(x, y, s):
     """Flat microchip with pins and circuit traces."""
-    draw.rounded_rectangle([x, y, x + s, y + s], radius=10, fill=NAVY2,
-                           outline=GOLD, width=4)
+    rounded_rect_outline(x, y, s, s, 10, 4, GOLD, NAVY2)
     inner = s // 4
-    draw.rounded_rectangle([x + inner, y + inner, x + s - inner, y + s - inner],
-                           radius=6, fill=GREEN)
-    draw.text((x + s // 2, y + s // 2 - 14), "NVDA", font=font(BOLD, 22),
-              fill=(255, 255, 255), anchor="mm")
-    pin = s // 6
+    rounded_rect(x + inner, y + inner, s - 2 * inner, s - 2 * inner, 6, GREEN)
+    label = "NVDA"
+    draw_text(x + s // 2 - text_width(label, 2) // 2, y + s // 2 - 7,
+              label, 2, WHITE)
     for i in range(3):
         off = s // 4 + i * s // 4
-        draw.line([(x + off, y - 14), (x + off, y)], fill=GOLD, width=5)
-        draw.line([(x + off, y + s), (x + off, y + s + 14)], fill=GOLD,
-                  width=5)
-        draw.line([(x - 14, y + off), (x, y + off)], fill=GOLD, width=5)
-        draw.line([(x + s, y + off), (x + s + 14, y + off)], fill=GOLD,
-                  width=5)
-    # circuit traces
-    draw.line([(x + s + 14, y + s // 4), (x + s + 44, y + s // 4),
-               (x + s + 44, y - 10)], fill=GOLD, width=3)
-    draw.ellipse([x + s + 38, y - 16, x + s + 50, y - 4], fill=GOLD)
+        fill_rect(x + off - 2, y - 14, 5, 14, GOLD)
+        fill_rect(x + off - 2, y + s, 5, 14, GOLD)
+        fill_rect(x - 14, y + off - 2, 14, 5, GOLD)
+        fill_rect(x + s, y + off - 2, 14, 5, GOLD)
+    # circuit traces (partly covered by the chart panel drawn after)
+    draw_line_thick(x + s + 14, y + s // 4, x + s + 44, y + s // 4, 3, GOLD)
+    draw_line_thick(x + s + 44, y + s // 4, x + s + 44, y - 10, 3, GOLD)
+    fill_circle(x + s + 44, y - 10, 6, GOLD)
 
 
-def draw_chart(draw, x, y, w, h):
+def draw_chart(x, y, w, h):
     """Steeply rising stock chart with arrow, on a panel."""
-    draw.rounded_rectangle([x, y, x + w, y + h], radius=10, fill=(255, 255, 255))
-    draw.line([(x + 14, y + h - 14), (x + w - 14, y + h - 14)], fill=GREY, width=2)
+    rounded_rect(x, y, w, h, 10, WHITE)
+    draw_text(x + 16, y + 8, "+100% YOY", 2, GREEN_D)
+    fill_rect(x + 14, y + h - 14, w - 28, 2, GREY)
     pts = [(x + 18, y + h - 34), (x + 52, y + h - 40), (x + 86, y + h - 52),
            (x + 120, y + h - 58), (x + 154, y + h - 92), (x + 188, y + h - 118),
            (x + w - 22, y + 26)]
-    draw.line(pts, fill=GREEN, width=6, joint="curve")
+    for i in range(len(pts) - 1):
+        draw_line_thick(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1],
+                        6, GREEN)
     hx, hy = pts[-1]
-    draw.polygon([(hx + 10, hy - 12), (hx + 12, hy + 6), (hx - 8, hy - 2)],
-                 fill=GREEN)
-    draw.text((x + 16, y + 8), "+100% YoY", font=font(BOLD, 20), fill=GREEN_D)
+    fill_polygon([(hx + 10, hy - 12), (hx + 12, hy + 6), (hx - 8, hy - 2)],
+                 GREEN)
 
 
-def icon(draw, kind, x, y, s, bg):
+def icon(kind, x, y, s, bg):
     """Small flat pictogram inside a coloured square."""
-    draw.rounded_rectangle([x, y, x + s, y + s], radius=10, fill=bg)
+    rounded_rect(x, y, s, s, 10, bg)
     cx, cy = x + s // 2, y + s // 2
-    white = (255, 255, 255)
     if kind == "globe":  # ASEAN / Manila summit
-        draw.ellipse([x + 10, y + 10, x + s - 10, y + s - 10], outline=white,
-                     width=4)
-        draw.ellipse([x + 20, y + 10, x + s - 20, y + s - 10], outline=white,
-                     width=3)
-        draw.line([(x + 10, cy), (x + s - 10, cy)], fill=white, width=3)
-        draw.line([(x + 10, cy - 9), (x + s - 10, cy - 9)], fill=white, width=2)
-        draw.line([(x + 10, cy + 9), (x + s - 10, cy + 9)], fill=white, width=2)
+        draw_circle(cx, cy, 16, WHITE)
+        for yy in range(cy - 16, cy + 17):
+            t = (yy - cy) / 16.0
+            dx = int(8 * (1 - t * t) ** 0.5)
+            set_px(cx - dx, yy, WHITE)
+            set_px(cx + dx, yy, WHITE)
+        fill_rect(x + 10, cy - 1, 33, 3, WHITE)
+        fill_rect(cx - 13, cy - 10, 27, 2, WHITE)
+        fill_rect(cx - 13, cy + 8, 27, 2, WHITE)
     elif kind == "bridge":
-        draw.line([(x + 8, y + s - 12), (x + s - 8, y + s - 12)], fill=white,
-                  width=4)
-        draw.arc([x + 8, y + 12, x + s - 8, y + s - 6], 180, 360, fill=white,
-                 width=4)
-        for px in (x + 16, x + s // 2, x + s - 16):
-            draw.line([(px, y + 22), (px, y + s - 12)], fill=white, width=4)
+        fill_rect(x + 8, y + s - 12, s - 15, 3, WHITE)
+        for px in range(cx - 18, cx + 19):
+            t = (px - cx) / 18.0
+            py = (y + s - 12) - int(14 * (1 - t * t) ** 0.5)
+            set_px(px, py, WHITE)
+            set_px(px, py + 1, WHITE)
+        for px in (x + 16, cx - 1, x + s - 17):
+            fill_rect(px, y + 30, 3, 11, WHITE)
     elif kind == "radar":  # drone / radar
         for r in (10, 18, 26):
-            draw.arc([cx - r, cy - r, cx + r, cy + r], 270, 30, fill=white,
-                     width=3)
-        draw.ellipse([cx - 4, cy - 4, cx + 4, cy + 4], fill=RED)
-        draw.line([(cx, cy), (cx + 20, cy - 20)], fill=white, width=3)
+            draw_circle(cx, cy, r, WHITE, quad="ne")
+        fill_circle(cx, cy, 4, RED)
+        draw_line_thick(cx, cy, cx + 20, cy - 20, 3, WHITE)
     elif kind == "trade":  # two-way trade arrows
-        draw.line([(x + 10, cy - 10), (x + s - 16, cy - 10)], fill=white,
-                  width=5)
-        draw.polygon([(x + s - 10, cy - 18), (x + s - 10, cy - 2),
-                      (x + s - 2, cy - 10)], fill=white)
-        draw.line([(x + s - 10, cy + 10), (x + 16, cy + 10)], fill=white,
-                  width=5)
-        draw.polygon([(x + 10, cy + 2), (x + 10, cy + 18), (x + 2, cy + 10)],
-                     fill=white)
+        fill_rect(x + 10, cy - 12, 27, 5, WHITE)
+        fill_polygon([(x + s - 10, cy - 18), (x + s - 10, cy - 2),
+                      (x + s - 2, cy - 10)], WHITE)
+        fill_rect(x + 15, cy + 8, 27, 5, WHITE)
+        fill_polygon([(x + 10, cy + 2), (x + 10, cy + 18),
+                      (x + 2, cy + 10)], WHITE)
     elif kind == "scales":  # sanctions / law
-        draw.line([(cx, y + 10), (cx, y + s - 12)], fill=white, width=4)
-        draw.line([(x + 12, y + 16), (x + s - 12, y + 16)], fill=white, width=4)
+        fill_rect(cx - 2, y + 10, 4, 30, WHITE)
+        fill_rect(x + 12, y + 14, s - 23, 4, WHITE)
         for sx in (x + 14, x + s - 14):
-            draw.line([(sx, y + 16), (sx, y + 30)], fill=white, width=3)
-            draw.polygon([(sx - 9, y + 30), (sx + 9, y + 30), (sx, y + 42)],
-                         fill=white)
-        draw.line([(x + 14, y + s - 12), (x + s - 14, y + s - 12)], fill=white,
-                  width=4)
+            fill_rect(sx - 1, y + 18, 3, 12, WHITE)
+            fill_polygon([(sx - 9, y + 30), (sx + 9, y + 30),
+                          (sx, y + 42)], WHITE)
+        fill_rect(x + 14, y + s - 12, s - 27, 4, WHITE)
     elif kind == "warn":  # UN casualty toll
-        draw.polygon([(cx, y + 8), (x + s - 8, y + s - 10), (x + 8, y + s - 10)],
-                     fill=white)
-        draw.text((cx, cy + 2), "!", font=font(BOLD, 30), fill=RED,
-                  anchor="mm")
+        fill_polygon([(cx, y + 8), (x + s - 8, y + s - 10),
+                      (x + 8, y + s - 10)], WHITE)
+        draw_text(cx - 7, cy - 4, "!", 3, RED)
     elif kind == "cricket":
-        draw.line([(x + 14, y + s - 12), (x + s - 22, y + 16)], fill=white,
-                  width=7)
-        draw.ellipse([x + s - 26, y + 8, x + s - 8, y + 26], fill=RED)
-        draw.line([(x + 12, y + 12), (x + 26, y + 26)], fill=white, width=3)
-        draw.line([(x + 12, y + 26), (x + 26, y + 12)], fill=white, width=3)
+        draw_line_thick(x + 14, y + s - 12, x + s - 22, y + 16, 7, WHITE)
+        fill_circle(x + s - 17, y + 17, 9, RED)
+        draw_line_thick(x + 12, y + 12, x + 26, y + 26, 3, WHITE)
+        draw_line_thick(x + 12, y + 26, x + 26, y + 12, 3, WHITE)
     elif kind == "bank":
-        draw.polygon([(x + 6, y + 22), (cx, y + 8), (x + s - 6, y + 22)],
-                     fill=white)
+        fill_polygon([(x + 6, y + 22), (cx, y + 8), (x + s - 6, y + 22)],
+                     WHITE)
         for px in (x + 13, x + 24, x + 35):
-            draw.line([(px, y + 26), (px, y + s - 14)], fill=white, width=4)
-        draw.line([(x + 8, y + s - 12), (x + s - 8, y + s - 12)], fill=white,
-                  width=4)
+            fill_rect(px, y + 26, 4, 12, WHITE)
+        fill_rect(x + 8, y + s - 12, s - 15, 4, WHITE)
 
 
+# ---------------------------------------------------------------- content
 TILES = [
     ("globe", "ASIA", NAVY2,
-     "TRUMP IN MANILA FOR ASEAN TALKS",
-     "Modi at ASEAN\u2013India summit; defence ties grow."),
+     "Trump in Manila for ASEAN talks",
+     "Modi at ASEAN–India summit; defence ties grow."),
     ("bridge", "EUROPE", RED,
-     "UKRAINE HITS CRIMEAN BRIDGE AGAIN",
+     "Ukraine hits Crimean bridge again",
      "Second day of strikes; Russia hits Kyiv bridges."),
     ("radar", "MIDDLE EAST", (122, 44, 44),
-     "IRAN DRONES HIT US BASE IN BAHRAIN",
+     "Iran drones hit US base in Bahrain",
      "Intercepted; tanker hit in Hormuz, 21 of 24 saved."),
     ("trade", "WORLD", TEAL,
-     "CANADA, CHINA EXTEND TRADE DEALS",
+     "Canada, China extend trade deals",
      "Xi meets Carney ahead of APEC; trade ties widen."),
     ("scales", "MIDDLE EAST", (90, 60, 20),
-     "UK SANCTIONS 8 SETTLEMENT FIRMS",
+     "UK sanctions 8 settlement firms",
      "Ceasefire may collapse; a hot meal every 2 days."),
     ("warn", "WORLD", (60, 60, 60),
-     "372 CIVILIANS KILLED IN UKRAINE",
+     "372 civilians killed in Ukraine",
      "UN toll for October; 2,230+ deaths in Sudan."),
     ("cricket", "SPORT", GREEN_D,
-     "DHONI RETIRES, SHAH RE-ELECTED",
-     "Dhoni becomes CSK mentor; India win SAFF 2\u20131."),
+     "Dhoni retires, Shah re-elected",
+     "Dhoni becomes CSK mentor; India win SAFF 2–1."),
     ("bank", "MARKETS", (70, 70, 110),
-     "DEUTSCHE BANK IGNORED WARNINGS",
+     "Deutsche Bank ignored warnings",
      "Leaked files: compliance alerts on risky clients."),
 ]
 
 BRIEF = [
-    "Cyclone Akvan intensifies in the Bay of Bengal; Chennai\u2013Yangon flights cancelled.",
+    "Cyclone Akvan intensifies in the Bay of Bengal; flights cancelled.",
     "SpaceX catches a falling Starship; Grammy 2027 nominations announced.",
-    "Judge extends Trump\u2019s deposition deadline in his $10bn BBC lawsuit to 22 January.",
+    "Judge extends Trump deposition deadline in $10bn BBC lawsuit to 22 January.",
 ]
 
 
+# ---------------------------------------------------------------- PNG writer
+def _chunk(tag, data):
+    out = struct.pack(">I", len(data)) + tag + data
+    out += struct.pack(">I", binascii.crc32(tag + data) & 0xFFFFFFFF)
+    return out
+
+
+def write_png(path):
+    raw = bytearray()
+    for y in range(H):
+        raw.append(0)
+        raw += fb[y * W * 3:(y + 1) * W * 3]
+    comp = zlib.compress(bytes(raw), 9)
+    ihdr = struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0)
+    png = (b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr)
+           + _chunk(b"IDAT", comp) + _chunk(b"IEND", b""))
+    with open(path, "wb") as f:
+        f.write(png)
+
+
+# ---------------------------------------------------------------- page
 def main():
-    img = Image.new("RGB", (W, H), PAPER)
-    d = ImageDraw.Draw(img)
+    fb[:] = bytes(PAPER) * (W * H)
 
     # ---- Masthead -------------------------------------------------------
-    d.rectangle([0, 0, W, 104], fill=NAVY)
-    d.rectangle([0, 104, W, 108], fill=GOLD)
-    spaced(d, (28, 14), "THE WORLD IN ONE PAGE", font(BOLD, 20),
-           (255, 255, 255), tracking=4)
-    d.text((28, 40), "WEDNESDAY 18 NOVEMBER 2026", font=font(BOLD, 44),
-           fill=(255, 255, 255))
-    d.text((W - 28, 22), "ONE DAY \u00b7 ONE PAGE", font=font(BOLD, 16),
-           fill=GOLD, anchor="ra")
+    fill_rect(0, 0, W, 104, NAVY)
+    fill_rect(0, 104, W, 4, GOLD)
+    draw_text(28, 14, norm("The World in One Page"), 3, WHITE, tracking=2)
+    draw_text(28, 42, norm("Wednesday 18 November 2026"), 6, WHITE)
+    right = norm("One day • One page")
+    draw_text(W - 28 - text_width(right, 2), 22, right, 2, GOLD)
 
     # ---- Hero: Nvidia ---------------------------------------------------
     hx, hy, hw, hh = 24, 118, 976, 302
-    d.rounded_rectangle([hx, hy, hx + hw, hy + hh], radius=12, fill=NAVY2)
-    d.text((hx + 24, hy + 16), "TOP STORY \u00b7 MARKETS",
-           font=font(BOLD, 16), fill=GOLD)
-    headline = "NVIDIA REVENUE DOUBLES TO $115.8BN \u2014 BUT HUANG STAYS OUT"
-    lines = fit_lines(d, headline, font(BOLD, 34), 560, 3)
-    y = hy + 44
-    for ln in lines:
-        d.text((hx + 24, y), ln, font=font(BOLD, 34), fill=(255, 255, 255))
-        y += 40
-    summary = ("Revenue $115.84bn, twice a year earlier, in the first report "
-               "since Jensen Huang\u2019s ouster. The board says it will not "
-               "reinstate him; Trump backs calls to bring him back.")
-    slines = fit_lines(d, summary, font(REG, 18), 560, 3)
-    y += 6
-    for ln in slines:
-        d.text((hx + 24, y), ln, font=font(REG, 18), fill=(214, 224, 234))
-        y += 24
+    rounded_rect(hx, hy, hw, hh, 12, NAVY2)
+    draw_text(hx + 24, hy + 16, norm("Top story • Markets"), 2, GOLD)
+    headline = norm("NVIDIA revenue doubles to $115.8bn — "
+                    "but Huang stays out")
+    y = hy + 42
+    for ln in fit_lines(headline, 4, 580, 3):
+        draw_text(hx + 24, y, ln, 4, WHITE)
+        y += 34
+    summary = norm("Revenue $115.84bn, twice a year earlier, in the first "
+                   "report since Jensen Huang’s ouster. The board says it "
+                   "will not reinstate him; Trump backs calls to bring "
+                   "him back.")
+    y = hy + 148
+    for ln in fit_lines(summary, 3, 580, 6):
+        draw_text(hx + 24, y, ln, 3, LIGHT)
+        y += 25
     # Hero scene: chip + rising chart
-    d.rounded_rectangle([hx + 620, hy + 16, hx + hw - 24, hy + hh - 16],
-                        radius=12, fill=(13, 38, 60))
-    draw_chip(d, hx + 648, hy + 52, 96)
-    draw_chart(d, hx + 762, hy + 52, 190, 150)
-    d.text((hx + 648, hy + 232), "FIRST REPORT SINCE THE OUSTER",
-           font=font(BOLD, 15), fill=GOLD)
-    d.text((hx + 648, hy + 256), "Board: no return for Huang",
-           font=font(REG, 16), fill=(214, 224, 234))
+    rounded_rect(hx + 620, hy + 16, hw - 644, hh - 32, 12, PANEL)
+    draw_chip(hx + 648, hy + 52, 96)
+    draw_chart(hx + 762, hy + 52, 190, 150)
+    draw_text(hx + 648, hy + 232, norm("First report since ouster"), 2, GOLD)
+    draw_text(hx + 648, hy + 254, norm("Board says no return"), 2, LIGHT)
 
     # ---- Story grid: 2 cols x 4 rows ------------------------------------
     gx, gy = 24, 432
     tw, th, gap = 482, 110, 12
-    tag_f = font(BOLD, 13)
-    head_f = font(BOLD, 26)
-    sum_f = font(REG, 15)
     for i, (kind, tag, color, head, summ) in enumerate(TILES):
         x = gx + (i % 2) * (tw + gap)
         y = gy + (i // 2) * (th + gap)
-        d.rounded_rectangle([x, y, x + tw, y + th], radius=10, fill=TILE_BG,
-                            outline=RULE, width=1)
-        icon(d, kind, x + 12, y + 12, 52, color)
+        rounded_rect_outline(x, y, tw, th, 10, 1, RULE, TILE_BG)
+        icon(kind, x + 12, y + 12, 52, color)
         tx = x + 76
-        d.text((tx, y + 10), tag, font=tag_f, fill=color)
-        hlines = fit_lines(d, head, head_f, tw - 88, 2)
-        hy2 = y + 28
+        draw_text(tx, y + 8, norm(tag), 2, color)
+        hlines = fit_lines(norm(head), 3, tw - 88, 2)
+        hy2 = y + 26
         for ln in hlines:
-            d.text((tx, hy2), ln, font=head_f, fill=INK)
-            hy2 += 29
-        max_sum_lines = 2 if len(hlines) == 1 else 1
-        slines = fit_lines(d, summ, sum_f, tw - 88, max_sum_lines)
-        sy = hy2 + 1
+            draw_text(tx, hy2, ln, 3, INK)
+            hy2 += 24
+        slines = fit_lines(norm(summ), 2, tw - 88, 2)
+        sy = hy2 + 4
         for ln in slines:
-            d.text((tx, sy), ln, font=sum_f, fill=(74, 80, 88))
-            sy += 19
+            draw_text(tx, sy, ln, 2, MUTED)
+            sy += 15
 
     # ---- Footer: also in brief ------------------------------------------
     fx, fy, fw, fh = 24, 916, 976, 92
-    d.rounded_rectangle([fx, fy, fx + fw, fy + fh], radius=10, fill=NAVY)
-    d.text((fx + 20, fy + 12), "ALSO IN BRIEF", font=font(BOLD, 17),
-           fill=GOLD)
+    rounded_rect(fx, fy, fw, fh, 10, NAVY)
+    draw_text(fx + 20, fy + 12, norm("Also in brief"), 2, GOLD)
+    date = norm("18 Nov 2026")
+    draw_text(W - 28 - text_width(date, 2), fy + 12, date, 2, GOLD)
     by = fy + 34
     for item in BRIEF:
-        d.text((fx + 20, by), "\u2022  " + item, font=font(REG, 15),
-               fill=(255, 255, 255))
+        draw_text(fx + 20, by, norm("•  " + item), 2, WHITE)
         by += 18
-    d.text((W - 28, fy + 12), "18 NOV 2026", font=font(BOLD, 15), fill=GOLD,
-           anchor="ra")
 
     out = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
     os.makedirs(out, exist_ok=True)
-    img.save(os.path.join(out, "entry.png"), format="PNG")
+    write_png(os.path.join(out, "entry.png"))
 
 
 if __name__ == "__main__":
